@@ -2,8 +2,9 @@ import re
 import string
 from operator import itemgetter
 import math
+import urllib
 
-punc = ",./<>?;':\`~!@#$%^&*_+=\""
+punc = ",./<>?;'\":\`~!@#$%^&*_-+=()"
 table = string.maketrans(punc, " "*len(punc))
 
 def analysis_text(text, stemming=False):     
@@ -13,7 +14,12 @@ def analysis_text(text, stemming=False):
     return text.split()
 
 def analysis_url(url):
-    pass
+    # Lower and remove /....
+    url = urllib.unquote(url)
+    # Remove ( and )
+    url = url.replace("(", "").replace(")", "")
+    text = url.lower().translate(table)
+    return text.split()
 
 class Doc:
     def __init__(self, docid):
@@ -29,8 +35,15 @@ class Doc:
         # Add doc len
         self.len = len(words)
 
-    def GetDocTf(self, word):
-        return self.words.get(word, 0)
+    def GetDocTf(self, word, fuzzy=False):
+        if not fuzzy:
+            return self.words.get(word, 0)
+        else:
+            tf = 0
+            for (key, cnt) in self.words.items():
+                if word in key:
+                    tf += cnt
+            return tf
 
     def GetDocLen(self):
         return self.len
@@ -51,8 +64,15 @@ class Collection:
 	# Add doc len
        	self.len += len(words)
 
-    def	GetCollTf(self, word):
-       	return self.words.get(word, 0)
+    def	GetCollTf(self, word, fuzzy = False):
+        if not fuzzy:
+            return self.words.get(word, 0)
+        else:
+            tf = 0
+            for (key, cnt) in self.words.items():
+                if word in key:
+                    tf += cnt
+            return tf
 
     def	GetCollLen(self):
        	return self.len
@@ -72,12 +92,23 @@ class LMIR:
         words = analysis_text(text)
         # Collection words
         self.coll.AddWords(words)
+        # Doc words
+        doc = Doc(docid)
+        doc.SetWords(words)
+        self.docs.append(doc)
+
+    def AddDocUrl(self, docid, url):
+        # Analysis url words
+        words = analysis_url(url)
+        # Collection words
+        self.coll.AddWords(words)
+       	# Doc words
         doc = Doc(docid)
         doc.SetWords(words)
         self.docs.append(doc)
 
     # Rank doc in colls according to query, score by LMIR.JM
-    def RankJM(self, query):
+    def RankJM(self, query, fuzzy=False):
         # Analysis query words
         qws = analysis_text(query)
         # Choose lmd
@@ -91,8 +122,8 @@ class LMIR:
             score = 1.0
             # score*=p(t|d)
             for qw in qws:
-                ptd = float(doc.GetDocTf(qw)) / float(doc.GetDocLen())
-                ptc = float(self.coll.GetCollTf(qw)) / float(self.coll.GetCollLen())
+                ptd = float(doc.GetDocTf(qw, fuzzy)) / float(doc.GetDocLen())
+                ptc = float(self.coll.GetCollTf(qw, fuzzy)) / float(self.coll.GetCollLen())
                 pd = lmd*ptd + (1-lmd)*ptc
                 score *= pd
             # Add to result
@@ -101,7 +132,7 @@ class LMIR:
         return sorted(result, key=itemgetter(1), reverse=True)
     
     # Rank doc in colls according to query, score by LMIR.DIR
-    def RankDIR(self, query):
+    def RankDIR(self, query, fuzzy=False):
         # Analysis query words
         qws = analysis_text(query)
         # Score each doc
@@ -110,7 +141,7 @@ class LMIR:
             score = 1.0
             # score*=p(t|d)
             for qw in qws:
-                ptd_up = float(doc.GetDocTf(qw)) + float(self.u)*float(self.coll.GetCollTf(qw))/float(self.coll.GetCollLen())
+                ptd_up = float(doc.GetDocTf(qw, fuzzy)) + float(self.u)*float(self.coll.GetCollTf(qw, fuzzy))/float(self.coll.GetCollLen())
                 ptd_down = float(doc.GetDocLen()) + float(self.u)
                 pd = float(ptd_up) / float(ptd_down)
                 score *= pd
@@ -120,7 +151,7 @@ class LMIR:
         return sorted(result, key=itemgetter(1), reverse=True)
 
     # Rank doc in colls according to query, score by Kullback-Leibler Divergence(KLD)
-    def RankKL(self, query):
+    def RankKL(self, query, fuzzy=False):
         # Analysis query words
         qws = analysis_text(query)
         # Score each doc
@@ -130,7 +161,7 @@ class LMIR:
             # score += -p(t|q)*log(P(t|d)) 
             for qw in qws:
                 ptq = float(1) / float(len(qws))
-                ptd = float(doc.GetDocTf(qw))/float(doc.GetDocLen())
+                ptd = float(doc.GetDocTf(qw, fuzzy))/float(doc.GetDocLen())
                 if ptd == 0.0:
                     continue
                 lptd = math.log(ptd, 2)
@@ -151,6 +182,8 @@ class LMIR:
             print doc.words
 
 if __name__ == "__main__":
+    # Test for text
+    print "--------Test For Text--------"
     str1 = "I'm liheyuan from ict.\nWhat's your name?"
     str2 = "I'm coder4 from beijing.\nWhat's your name?"
     
@@ -163,3 +196,21 @@ if __name__ == "__main__":
     print ir.RankJM(query)
     print ir.RankDIR(query)
     print ir.RankKL(query)
+
+    # Test for url
+    print "--------Test For Url--------"
+    url1 = "http://en.wikipedia.org/wiki/London_(disambiguation)"
+    url2 = "http://en.wikipedia.org/wiki/Leviathan_(disambiguation)"
+    url3 = "http://en.wikipedia.org/wiki/403(b)"
+
+    ir2 = LMIR()
+    ir2.AddDocUrl("url1", url1)
+    ir2.AddDocUrl("url2", url2)
+    ir2.AddDocUrl("url3", url3)
+    #ir2.test()
+
+    query = "403 wiki"
+    print ir2.RankJM(query, True) # Fuzzy
+    print ir2.RankDIR(query, True)
+    print ir2.RankKL(query, True)
+    
